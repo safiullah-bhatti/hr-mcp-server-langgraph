@@ -150,8 +150,13 @@ async function main() {
     },
     async ({ query }) => {
       console.log(`[SERVER] [RAG:hr-policy] search called -> "${query}"`);
-      const matches = await hrIndex.search(query, 3);
-      return ragToolResult("hr-policy", matches);
+      try {
+        const matches = await hrIndex.search(query, 3);
+        return ragToolResult("hr-policy", matches);
+      } catch (err) {
+        console.error(`[SERVER] [RAG:hr-policy] search FAILED for "${query}":`, err);
+        throw err;
+      }
     }
   );
 
@@ -165,8 +170,13 @@ async function main() {
     },
     async ({ query }) => {
       console.log(`[SERVER] [RAG:engineering] search called -> "${query}"`);
-      const matches = await engIndex.search(query, 3);
-      return ragToolResult("engineering", matches);
+      try {
+        const matches = await engIndex.search(query, 3);
+        return ragToolResult("engineering", matches);
+      } catch (err) {
+        console.error(`[SERVER] [RAG:engineering] search FAILED for "${query}":`, err);
+        throw err;
+      }
     }
   );
 
@@ -180,8 +190,13 @@ async function main() {
     },
     async ({ query }) => {
       console.log(`[SERVER] [RAG:admin-policies] search called -> "${query}"`);
-      const matches = await adminIndex.search(query, 3);
-      return ragToolResult("admin-policies", matches);
+      try {
+        const matches = await adminIndex.search(query, 3);
+        return ragToolResult("admin-policies", matches);
+      } catch (err) {
+        console.error(`[SERVER] [RAG:admin-policies] search FAILED for "${query}":`, err);
+        throw err;
+      }
     }
   );
 
