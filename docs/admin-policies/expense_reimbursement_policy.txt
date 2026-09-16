@@ -1,0 +1,41 @@
+Expense & Reimbursement Policy
+
+General Rule
+Business expenses are reimbursed when they are reasonable, necessary
+for work, and submitted with an itemized receipt within 30 days of
+the expense date. Expenses submitted after 60 days are not
+reimbursed except with director-level approval.
+
+Travel Expenses
+Economy class is the default for flights under 6 hours; premium
+economy is allowed for flights over 6 hours with manager approval.
+Hotel bookings should stay within the per-city rate band published
+on the Admin portal. Ground transport (taxi, rideshare, train) is
+reimbursed at actual cost; personal car mileage is reimbursed at the
+published company mileage rate.
+
+Meals
+Meals while travelling on approved business trips are reimbursed up
+to a daily cap, published per country on the Admin portal, without a
+detailed line-item requirement below that cap. Meals with clients or
+candidates are reimbursed at actual cost with the attendee list noted
+on the expense report.
+
+Equipment & Office Supplies
+A one-time home-office setup allowance is available for new fully
+remote hires, claimable within the first 60 days of start date.
+Ongoing office supplies (monitor, keyboard, chair) above the initial
+allowance require manager pre-approval through the Admin portal
+before purchase, not after.
+
+Submission Process
+All expenses are submitted through the Admin portal's Expenses tab
+with the receipt attached as PDF or photo. Expenses over the
+per-category threshold require a second approval from the relevant
+department head in addition to the direct manager.
+
+Non-Reimbursable Items
+Alcohol outside of approved client entertainment, personal
+entertainment, traffic or parking fines, and airline lounge or
+loyalty program purchases are not reimbursable under any
+circumstance.

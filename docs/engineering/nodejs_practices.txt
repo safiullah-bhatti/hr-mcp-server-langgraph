@@ -1,0 +1,29 @@
+Node.js Coding Practices
+
+Always use async/await instead of raw callbacks or chained .then() calls
+for readability. Wrap async route handlers in a try/catch, or use a
+centralized error-handling middleware so errors aren't silently swallowed.
+
+Never block the event loop with synchronous heavy computation (e.g. sync
+file reads, large JSON.parse on the request thread). Offload CPU-heavy
+work to a worker thread or a background job queue instead.
+
+Keep configuration in environment variables (.env file locally, real env
+vars in production), never hardcode secrets or API keys in source code.
+Validate all incoming request bodies with a schema library (Zod or Joi)
+before touching business logic.
+
+Use ESLint and Prettier with a shared team config, enforced via a
+pre-commit hook, so style discrepancies never reach code review.
+
+Structure larger apps with a clear separation: routes/controllers for
+HTTP handling, services for business logic, and a data-access layer for
+database calls — avoid putting DB queries directly inside route handlers.
+
+For production APIs, add rate limiting and security headers (helmet),
+structured JSON logging (pino or winston), and centralized error
+responses with consistent shape: { error: { code, message } }.
+
+Write unit tests with Jest or Vitest for business logic, and integration
+tests (supertest) for HTTP endpoints. Aim to test behavior, not
+implementation details.

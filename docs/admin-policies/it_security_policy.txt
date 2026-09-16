@@ -1,0 +1,40 @@
+IT & Security Policy
+
+Company Device Usage
+All company-issued laptops must have full-disk encryption and the
+corporate MDM agent installed before first use. Personal devices may
+only access email and chat via the approved mobile app containers —
+direct IMAP/SMTP access from personal devices is not permitted.
+
+Password & MFA Requirements
+Multi-factor authentication is mandatory on all corporate accounts
+(email, VPN, source control, cloud console). Passwords must be at
+least 14 characters and rotated only when there is evidence of
+compromise — NIST-aligned policy, not a fixed 90-day rotation.
+
+VPN & Remote Access
+Access to internal systems (source control, internal wikis, the
+build server) from outside the office network requires the company
+VPN. Split-tunneling is disabled by default; request an exception
+through the IT portal if a specific tool requires it.
+
+Software Installation
+Employees may install standard development tooling (IDEs, browsers,
+Docker, language runtimes) without approval. Any tool that requests
+broad filesystem or network access, or any browser extension beyond
+the pre-approved list, requires a ticket to the security team before
+installation.
+
+Data Classification
+Company data is classified as Public, Internal, Confidential, or
+Restricted. Confidential and Restricted data (customer PII, financial
+records, unreleased product plans) may not be pasted into third-party
+AI tools or public code-sharing sites. Restricted data additionally
+requires encryption at rest and an access log.
+
+Incident Reporting
+Suspected phishing, a lost device, or any suspected credential
+compromise must be reported to security@company.example within 1
+hour of discovery. Do not attempt to "clean up" a suspected compromise
+yourself before reporting it — early reporting materially reduces
+incident scope.

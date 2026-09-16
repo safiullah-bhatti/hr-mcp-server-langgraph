@@ -1,0 +1,32 @@
+.NET Coding Practices
+
+Follow SOLID principles, especially dependency injection via the built-in
+DI container — avoid using `new` to construct services directly inside
+controllers or business classes; register them in Program.cs instead.
+
+Use async/await consistently for all I/O-bound operations (database
+calls, HTTP calls, file access). Avoid .Result or .Wait() on async
+calls, as they can cause thread-pool starvation and deadlocks.
+
+Enable nullable reference types (`<Nullable>enable</Nullable>`) project-
+wide to catch null-reference bugs at compile time rather than runtime.
+
+Keep configuration in appsettings.json plus environment-specific
+overrides (appsettings.Development.json), bound to strongly typed
+options classes via IOptions<T> rather than reading raw config strings
+scattered through the codebase.
+
+Use FluentValidation for request validation instead of scattering manual
+if-checks through controller actions. Return consistent ProblemDetails
+responses for validation and error cases.
+
+For Entity Framework Core: avoid N+1 queries by using .Include() for
+related data, use AsNoTracking() for read-only queries, and always wrap
+multi-step writes in a transaction.
+
+Use structured logging (Serilog) with correlation IDs per request, so a
+single request can be traced across logs in production.
+
+Write unit tests with xUnit and use an in-memory or test-container
+database for integration tests — never point tests at a shared
+development database.

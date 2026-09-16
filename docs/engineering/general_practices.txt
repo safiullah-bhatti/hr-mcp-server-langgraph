@@ -1,0 +1,30 @@
+General Engineering Practices
+
+Git Commit Convention
+Use Conventional Commits format: type(scope): short description — e.g.
+"fix(auth): handle expired token refresh correctly". Types include feat,
+fix, refactor, docs, test, and chore. Keep commits small and focused on
+a single logical change.
+
+Branching Strategy
+Use trunk-based development with short-lived feature branches (ideally
+under 2 days of work) merged via pull request. Avoid long-lived branches
+that drift far from main, as they cause painful merge conflicts.
+
+Code Review Guidelines
+Every pull request requires at least one approval before merging. Focus
+review comments on correctness, security, and maintainability rather
+than personal style preferences already enforced by linters. Leave
+actionable, specific comments rather than vague "this looks off."
+
+CI/CD Requirements
+Every pull request must pass automated linting, unit tests, and a build
+step before it can be merged. Deployments to production should be
+gated behind a passing test suite and, ideally, a manual approval step
+for high-risk changes.
+
+Documentation Requirements
+Any new public API, endpoint, or shared utility function must include a
+short docstring or README note explaining its purpose, inputs, and
+outputs — future maintainers should not need to reverse-engineer intent
+from implementation alone.
