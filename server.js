@@ -30,6 +30,16 @@
 //    concrete case in this demo where the client genuinely benefits
 //    from LangGraph over a flat while-loop — see the comment block at
 //    the top of graph.js for why.
+//
+// 3. FIX: a single McpServer instance can only be connected to ONE
+//    transport at a time — connecting a second one before the first
+//    fully closes throws "Already connected to a transport." A
+//    LangGraph run makes more sequential tool calls per session
+//    (original + retry) than the old single-call version did, which
+//    made this pre-existing bug easy to hit. Fix: createMcpServer()
+//    below builds a FRESH, cheap McpServer (tools re-registered
+//    against the already-built indices — no re-embedding) for EVERY
+//    incoming /mcp request, instead of reusing one shared instance.
 
 import "dotenv/config";                 // MUST be first: loads .env before anything below reads process.env
 import express from "express";
@@ -43,8 +53,6 @@ import { buildIndex } from "./rag.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
 
-const server = new McpServer({ name: "hr-tools-server", version: "1.0.0" });
-
 const PROJECT_NAMES = [
   "Phoenix", "Atlas", "Nimbus", "Falcon", "Orion",
   "Titan", "Nova", "Zephyr", "Quartz", "Comet",
@@ -55,73 +63,8 @@ function randInt(max) {
   return Math.floor(Math.random() * (max + 1));
 }
 
-// ---- 4 "live data" tools — unchanged logic from before ----
-
-server.registerTool(
-  "get_leave_balance",
-  {
-    title: "Get Leave Balance",
-    description: "Returns the employee's remaining leave balance for this year.",
-    inputSchema: z.object({}),
-  },
-  async () => {
-    const balance = randInt(20);
-    console.log(`[SERVER] get_leave_balance called -> ${balance} days`);
-    return { content: [{ type: "text", text: JSON.stringify({ remaining_leave_days: balance }) }] };
-  }
-);
-
-server.registerTool(
-  "get_my_projects",
-  {
-    title: "Get My Projects",
-    description: "Returns the list of projects the employee is currently working on.",
-    inputSchema: z.object({}),
-  },
-  async () => {
-    const count = Math.max(1, randInt(10));
-    const shuffled = [...PROJECT_NAMES].sort(() => 0.5 - Math.random());
-    const projects = shuffled.slice(0, Math.min(count, PROJECT_NAMES.length));
-    console.log(`[SERVER] get_my_projects called -> ${JSON.stringify(projects)}`);
-    return { content: [{ type: "text", text: JSON.stringify({ projects }) }] };
-  }
-);
-
-server.registerTool(
-  "get_my_manager",
-  {
-    title: "Get My Manager",
-    description: "Returns the name of the employee's manager.",
-    inputSchema: z.object({}),
-  },
-  async () => {
-    const manager = MANAGERS[randInt(MANAGERS.length - 1)];
-    console.log(`[SERVER] get_my_manager called -> ${manager}`);
-    return { content: [{ type: "text", text: manager }] };
-  }
-);
-
-server.registerTool(
-  "get_total_pto",
-  {
-    title: "Get Total PTO",
-    description: "Returns the total number of PTO days allowed per year at the company.",
-    inputSchema: z.object({}),
-  },
-  async () => {
-    const pto = randInt(20);
-    console.log(`[SERVER] get_total_pto called -> ${pto} days`);
-    return { content: [{ type: "text", text: JSON.stringify({ total_pto_days: pto }) }] };
-  }
-);
-
-// ---- 3 RAG tools — same retrieval logic as before, now returning a
-// small JSON envelope (topScore + matches) instead of flat text, so a
-// caller can programmatically judge retrieval quality. See the big
-// comment above main(). ----
-
-// Shared by all three RAG tool handlers below — kept in one place so
-// the "what does a RAG tool return" contract only has one definition.
+// Shared by all three RAG tool handlers — kept in one place so the
+// "what does a RAG tool return" contract only has one definition.
 function ragToolResult(label, matches) {
   matches.forEach((m) =>
     console.log(`[SERVER] [RAG:${label}]   match (score ${m.score.toFixed(3)}) from ${m.source}`)
@@ -134,11 +77,76 @@ function ragToolResult(label, matches) {
   return { content: [{ type: "text", text: JSON.stringify(payload) }] };
 }
 
-async function main() {
-  console.log("[SERVER] Building RAG indices from docs/ ...");
-  const hrIndex = await buildIndex(path.join(__dirname, "docs/hr-policy"), "hr-policy");
-  const engIndex = await buildIndex(path.join(__dirname, "docs/engineering"), "engineering");
-  const adminIndex = await buildIndex(path.join(__dirname, "docs/admin-policies"), "admin-policies");
+// Builds a brand-new McpServer with all 7 tools registered, closing
+// over the already-built indices (cheap — no re-embedding, just new
+// tool-registration bookkeeping). Called once per incoming HTTP
+// request so each request gets its own server<->transport pairing.
+function createMcpServer(hrIndex, engIndex, adminIndex) {
+  const server = new McpServer({ name: "hr-tools-server", version: "1.0.0" });
+
+  // ---- 4 "live data" tools — unchanged logic from before ----
+
+  server.registerTool(
+    "get_leave_balance",
+    {
+      title: "Get Leave Balance",
+      description: "Returns the employee's remaining leave balance for this year.",
+      inputSchema: z.object({}),
+    },
+    async () => {
+      const balance = randInt(20);
+      console.log(`[SERVER] get_leave_balance called -> ${balance} days`);
+      return { content: [{ type: "text", text: JSON.stringify({ remaining_leave_days: balance }) }] };
+    }
+  );
+
+  server.registerTool(
+    "get_my_projects",
+    {
+      title: "Get My Projects",
+      description: "Returns the list of projects the employee is currently working on.",
+      inputSchema: z.object({}),
+    },
+    async () => {
+      const count = Math.max(1, randInt(10));
+      const shuffled = [...PROJECT_NAMES].sort(() => 0.5 - Math.random());
+      const projects = shuffled.slice(0, Math.min(count, PROJECT_NAMES.length));
+      console.log(`[SERVER] get_my_projects called -> ${JSON.stringify(projects)}`);
+      return { content: [{ type: "text", text: JSON.stringify({ projects }) }] };
+    }
+  );
+
+  server.registerTool(
+    "get_my_manager",
+    {
+      title: "Get My Manager",
+      description: "Returns the name of the employee's manager.",
+      inputSchema: z.object({}),
+    },
+    async () => {
+      const manager = MANAGERS[randInt(MANAGERS.length - 1)];
+      console.log(`[SERVER] get_my_manager called -> ${manager}`);
+      return { content: [{ type: "text", text: manager }] };
+    }
+  );
+
+  server.registerTool(
+    "get_total_pto",
+    {
+      title: "Get Total PTO",
+      description: "Returns the total number of PTO days allowed per year at the company.",
+      inputSchema: z.object({}),
+    },
+    async () => {
+      const pto = randInt(20);
+      console.log(`[SERVER] get_total_pto called -> ${pto} days`);
+      return { content: [{ type: "text", text: JSON.stringify({ total_pto_days: pto }) }] };
+    }
+  );
+
+  // ---- 3 RAG tools — same retrieval logic as before, returning a
+  // small JSON envelope (topScore + matches) instead of flat text, so
+  // a caller can programmatically judge retrieval quality. ----
 
   server.registerTool(
     "search_hr_policy",
@@ -200,21 +208,35 @@ async function main() {
     }
   );
 
+  return server;
+}
+
+async function main() {
+  console.log("[SERVER] Building RAG indices from docs/ ...");
+  const hrIndex = await buildIndex(path.join(__dirname, "docs/hr-policy"), "hr-policy");
+  const engIndex = await buildIndex(path.join(__dirname, "docs/engineering"), "engineering");
+  const adminIndex = await buildIndex(path.join(__dirname, "docs/admin-policies"), "admin-policies");
+
   // ---- HTTP transport setup ----
-  // Stateless mode (sessionIdGenerator: undefined). IMPORTANT: a single
-  // transport instance can't safely be reused across multiple sequential
-  // requests in this mode (the SDK's initialize/notification handshake
-  // breaks on request #2+). So we create a FRESH transport per incoming
-  // request, but connect it to the SAME long-lived `server` — meaning
-  // the RAG indices above are still only built once, at startup, not
-  // per request.
+  // Stateless mode (sessionIdGenerator: undefined). A single transport
+  // instance can't safely be reused across multiple sequential
+  // requests in this mode, so — same as before — we create a FRESH
+  // transport per incoming request. What's new: we also create a
+  // FRESH McpServer per request (via createMcpServer(), cheap — the
+  // indices above are still only built once, at startup) instead of
+  // reusing one shared server, since a shared server can only ever be
+  // connected to one transport at a time.
   const app = express();
   app.use(express.json());
 
   app.post("/mcp", async (req, res) => {
     try {
+      const server = createMcpServer(hrIndex, engIndex, adminIndex);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      res.on("close", () => transport.close());
+      res.on("close", () => {
+        transport.close();
+        server.close();
+      });
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (err) {
