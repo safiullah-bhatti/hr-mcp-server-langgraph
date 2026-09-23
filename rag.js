@@ -36,7 +36,7 @@ const CHUNK_OVERLAP = 80;
 // talks to Claude; nothing ties these together.
 const embeddings = new GoogleGenerativeAIEmbeddings({
   apiKey: process.env.GEMINI_API_KEY,
-  model: "text-embedding-004",
+  model: "gemini-embedding-001",
 });
 
 const splitter = new RecursiveCharacterTextSplitter({
