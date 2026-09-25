@@ -1,0 +1,6 @@
+Testing Practices
+
+Add focused tests for new behavior and regression tests for fixed bugs.
+Keep unit tests independent of network services and shared databases.
+Use integration tests for important boundaries such as storage and
+HTTP APIs. Tests should be repeatable and clean up any data they create.

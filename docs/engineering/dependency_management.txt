@@ -1,0 +1,7 @@
+Dependency Management Practices
+
+Use approved package registries and keep dependencies limited to what
+the project needs. Review release notes and known security advisories
+before upgrades. Pin versions through the project lockfile, commit the
+lockfile with dependency changes, and remove packages that are no
+longer used.

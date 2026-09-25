@@ -1,0 +1,6 @@
+Mobile Device Policy
+
+Employees who access company email or chat on a mobile phone must use
+the approved managed application. Enable a screen lock and install
+security updates promptly. Report a lost device to IT within one hour.
+Company data must not be saved to personal cloud storage.

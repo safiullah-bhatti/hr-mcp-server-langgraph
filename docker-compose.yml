@@ -1,0 +1,52 @@
+# Spins up the three vector databases rag.js talks to. This is the
+# ONLY thing that needs Docker in this project — the Node.js server
+# itself still just runs with `node server.js`, no container needed.
+#
+# Usage:
+#   docker compose up -d      # start all three, in the background
+#   docker compose down       # stop them, keep data
+#   docker compose down -v    # stop them AND wipe all indexed data
+#                              # (useful between demo runs — see the
+#                              # CAVEAT comment at the top of rag.js)
+#
+# Ports are the libraries' own defaults, except Postgres, which is
+# remapped to 5433 on the host so it won't collide with a Postgres
+# you might already have running locally on 5432.
+
+services:
+  chroma:
+    image: chromadb/chroma:latest
+    container_name: hr-mcp-chroma
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: hr-mcp-postgres
+    environment:
+      POSTGRES_USER: llamaindex
+      POSTGRES_PASSWORD: llamaindex
+      POSTGRES_DB: engineering_docs
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: hr-mcp-qdrant
+    ports:
+      - "6333:6333" # REST API — this is what QDRANT_URL points at
+      - "6334:6334" # gRPC, unused here but exposed for completeness
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+volumes:
+  chroma_data:
+  pg_data:
+  qdrant_data:
