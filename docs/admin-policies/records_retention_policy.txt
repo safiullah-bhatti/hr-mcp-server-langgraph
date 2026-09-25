@@ -1,0 +1,6 @@
+Records Retention Policy
+
+Keep business records only for the approved retention period listed in
+the records schedule. Store records in approved company systems and
+limit access to employees who need them. Do not delete records covered
+by a legal hold; contact Legal or Compliance if unsure.

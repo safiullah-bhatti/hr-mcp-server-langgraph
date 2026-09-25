@@ -1,5 +1,5 @@
 {
-  "name": "hr-mcp-server-langchain",
+  "name": "hr-mcp-server-llamaindex",
   "version": "1.0.0",
   "type": "module",
   "main": "server.js",
@@ -8,9 +8,19 @@
     "zod": "^3.23.8",
     "express": "^4.19.2",
     "dotenv": "^16.4.5",
-    "@langchain/core": "^0.3.40",
-    "@langchain/textsplitters": "^0.1.0",
-    "@langchain/google-genai": "^0.1.9",
-    "langchain": "^0.3.15"
+    "llamaindex": "^0.12.1",
+    "@llamaindex/google": "^0.4.1",
+    "@llamaindex/chroma": "^0.0.37",
+    "chromadb": "^1.9.2",
+    "@llamaindex/postgres": "^0.0.66",
+    "pg": "^8.13.1",
+    "pgvector": "0.2.0",
+    "pdf-parse": "^2.4.5",
+    "@llamaindex/qdrant": "^0.1.33",
+    "@qdrant/js-client-rest": "^1.13.0"
+  },
+  "overrides": {
+    "@llamaindex/core": "0.6.23",
+    "@llamaindex/env": "0.1.31"
   }
 }

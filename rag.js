@@ -1,121 +1,218 @@
-// hr-mcp-server-langchain/rag.js
+// hr-mcp-server-langgraph/rag.js
 //
-// Same job as the original rag.js: build an in-memory semantic search
-// index per doc folder, at server startup, no persistence.
+// LlamaIndex.TS version. Same job as the LangChain version: build a
+// semantic-search index per doc folder, at server startup, and expose
+// { search(query, topK), retriever } so server.js does NOT need to
+// change at all — same exported buildIndex() signature, same
+// { text, source, score } shape out of search().
 //
-// What changed vs. the hand-rolled version: chunking, embedding, and
-// the vector store + cosine-similarity search are no longer written by
-// hand — they're LangChain's RecursiveCharacterTextSplitter,
-// GoogleGenerativeAIEmbeddings, and MemoryVectorStore.
+// What's actually different from the LangChain version (this is the
+// point of this file):
 //
-// Why this matters even though the *behavior* is the same: buildIndex()
-// keeps the exact same exported signature and the exact same
-// { text, source, score } shape from search(), so server.js does NOT
-// need to change at all. The only thing that changes is what's INSIDE
-// buildIndex. And because MemoryVectorStore implements the same
-// VectorStore interface as Chroma/PGVectorStore, swapping to a real
-// persistent vector DB later is a ~3-line change in this file only —
-// see the comment at the bottom.
+// 1. CHUNKING. LangChain's version manually split each file's text
+//    into chunks with RecursiveCharacterTextSplitter BEFORE creating
+//    Documents — so LangChain only ever saw pre-chunked text.
+//    LlamaIndex flips this: you hand it one Document per FILE (full
+//    text + metadata), and a `transformations: [new SentenceSplitter(...)]`
+//    pipeline does the chunking for you as documents are ingested into
+//    the index. The resulting chunks (LlamaIndex calls them "Nodes")
+//    automatically inherit the parent Document's metadata (source
+//    filename) — you never have to thread `{ metadata: { source } }`
+//    through a manual loop like the LangChain version did.
+//
+// 2. VECTOR STORE PER DOMAIN. This is the other half of what you
+//    asked for: each of the three RAG domains now gets a genuinely
+//    different, persistent vector database instead of one shared
+//    in-memory store:
+//      - hr-policy        -> ChromaDB   (@llamaindex/chroma)
+//      - engineering       -> Postgres/pgvector (@llamaindex/postgres)
+//      - admin-policies    -> Qdrant     (@llamaindex/qdrant)
+//    All three implement LlamaIndex's same BaseVectorStore interface,
+//    so buildIndex() itself doesn't care which one it's talking to —
+//    only vectorStoreFor(label) below knows. That's the LlamaIndex
+//    equivalent of the "swap the store, nothing else changes" comment
+//    that was already in the old rag.js.
+//
+// CAVEAT (read before demoing): unlike the old in-memory store, these
+// three are persistent. Every time you restart `node server.js`, the
+// docs get re-embedded and re-inserted into whatever collection/table
+// already exists — Chroma and Postgres will happily accumulate
+// duplicate chunks across restarts. For a demo this doesn't break
+// anything (you'll just get repeated matches with the same score),
+// but if you want a clean slate, run `docker compose down -v` between
+// runs to wipe the volumes. A production version would check
+// "has this domain already been indexed?" before re-inserting —
+// intentionally left out here to keep this file focused on the
+// LlamaIndex swap itself.
+//
+// DEPRECATION NOTE: @llamaindex/qdrant is currently marked deprecated
+// on npm (no longer maintained by the LlamaIndex team, but still
+// published and functional as of this writing). It's used here
+// because it's still the most direct way to plug Qdrant into
+// LlamaIndex.TS's VectorStoreIndex. If it stops working after an
+// LlamaIndex core upgrade, the fix is to implement a small custom
+// class extending LlamaIndex's BaseVectorStore against
+// @qdrant/js-client-rest directly — everything else in this file
+// (buildIndex, search, the SentenceSplitter pipeline) stays the same.
 
 import fs from "fs";
 import path from "path";
 import "dotenv/config";
-import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
-import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
-import { MemoryVectorStore } from "langchain/vectorstores/memory";
-import { Document } from "@langchain/core/documents";
+import { PDFParse } from "pdf-parse";
+import {
+  Document,
+  VectorStoreIndex,
+  Settings,
+  SentenceSplitter,
+  storageContextFromDefaults,
+} from "llamaindex";
+// NOTE: LlamaIndex.TS's own docs are inconsistent about whether this
+// enum is exported as `GEMINI_MODEL` or `GEMINI_EMBEDDING_MODEL` —
+// the API reference for GeminiEmbedding's options type names it
+// `GEMINI_EMBEDDING_MODEL`, so that's what's used here. If `npm
+// install` pulls a version where it's actually named differently,
+// swap this import accordingly — everything else in this file is
+// unaffected either way.
+import { GeminiEmbedding } from "@llamaindex/google";
+import { ChromaVectorStore } from "@llamaindex/chroma";
+import { PGVectorStore } from "@llamaindex/postgres";
+import { QdrantVectorStore } from "@llamaindex/qdrant";
 
-// Same numbers as the original hand-rolled chunker, so index behavior
-// doesn't silently change when you swap in this version.
+// Same numbers as the original hand-rolled/LangChain chunker, so
+// retrieval granularity doesn't silently change just because the
+// library changed.
 const CHUNK_SIZE = 500;
 const CHUNK_OVERLAP = 80;
 
-// Same embedding provider (Gemini) as before — this is still a
-// SEPARATE concern from which LLM your client uses to hold the
-// conversation. The server can embed with Gemini while the client
-// talks to Claude; nothing ties these together.
-const embeddings = new GoogleGenerativeAIEmbeddings({
+// GEMINI_MODEL.TEXT_EMBEDDING_004 is Google's newer embedding model,
+// 768-dimensional. (The TS SDK's GeminiEmbedding currently exposes
+// two models — EMBEDDING_001 and TEXT_EMBEDDING_004 — both 768-dim;
+// unlike LangChain's gemini-embedding-001 usage in the old version,
+// the TS SDK doesn't expose a configurable outputDimensionality, so
+// we pick the fixed 768-dim model and use that dimension everywhere
+// a store needs to know it up front, e.g. Postgres below.)
+// GeminiEmbedding sends no reduced outputDimensionality in its
+// embedContent request, so gemini-embedding-001 returns the default
+// 3072-dimensional vectors. Postgres needs this size for its vector column.
+const EMBED_DIM = 3072;
+
+Settings.embedModel = new GeminiEmbedding({
   apiKey: process.env.GEMINI_API_KEY,
   model: "gemini-embedding-001",
 });
 
-const splitter = new RecursiveCharacterTextSplitter({
+// The chunking pipeline every domain's index is built with. Handed to
+// VectorStoreIndex.fromDocuments() as `transformations` — this is
+// what turns whole-file Documents into 500-char/80-overlap Nodes.
+const splitter = new SentenceSplitter({
   chunkSize: CHUNK_SIZE,
   chunkOverlap: CHUNK_OVERLAP,
 });
 
-// Reads every .txt file in a folder, chunks + embeds each one, and
-// returns a { search(query, topK), retriever } object.
+// ---- Per-domain vector store selection ----
+// This function is the entire "which real vector DB does this domain
+// use" decision. Everything else in buildIndex() is store-agnostic.
+function vectorStoreFor(label) {
+  switch (label) {
+    case "hr-policy":
+      console.log(`[SERVER] [RAG:${label}] backing store: ChromaDB (${process.env.CHROMA_URL || "http://localhost:8000"})`);
+      return new ChromaVectorStore({
+        collectionName: "hr_policy",
+        host: process.env.CHROMA_URL || "http://localhost:8000",
+      });
+
+    case "engineering":
+      console.log(`[SERVER] [RAG:${label}] backing store: Postgres/pgvector`);
+      return new PGVectorStore({
+        // The current LlamaIndex Postgres adapter accepts pg's
+        // ClientConfig under `clientConfig`; a top-level
+        // `connectionString` is ignored, leaving `config.client`
+        // undefined and causing a constructor error.
+        clientConfig: {
+          connectionString:
+            process.env.PG_CONNECTION_STRING ||
+            "postgresql://llamaindex:llamaindex@localhost:5433/engineering_docs",
+        },
+        // A prior run may have created this table with VECTOR(768);
+        // CREATE TABLE IF NOT EXISTS won't change an existing column.
+        tableName: "engineering_practices_3072",
+        dimensions: EMBED_DIM,
+      });
+
+    case "admin-policies":
+      console.log(`[SERVER] [RAG:${label}] backing store: Qdrant (${process.env.QDRANT_URL || "http://localhost:6333"})`);
+      return new QdrantVectorStore({
+        url: process.env.QDRANT_URL || "http://localhost:6333",
+        collectionName: "admin_policies",
+      });
+
+    default:
+      // Fail loudly rather than silently falling back to some default
+      // store — a 4th domain added later needs an explicit decision
+      // made here, same as the old file's comment already called out.
+      throw new Error(
+        `[SERVER] [RAG] No vector store configured for domain "${label}". Add a case in vectorStoreFor().`
+      );
+  }
+}
+
+// Reads every .txt and .pdf file in a folder, wraps each full file as
+// one Document (metadata: source filename), and lets VectorStoreIndex
+// do the chunking + embedding + storage via the domain's vector store.
 //
-// `search()` is kept so server.js's two tool handlers don't need any
-// changes. `retriever` is exposed alongside it for anyone who wants to
-// move to the more idiomatic LangChain call shape later
-// (retriever.invoke(query)) — e.g. once this gets bound into a
-// LangGraph router down the line.
+// `search()` is kept so server.js's tool handlers don't need any
+// changes. `retriever` is exposed alongside it, same as before, for
+// anyone who wants the more idiomatic `retriever.retrieve(query)`
+// call shape.
 export async function buildIndex(folderPath, label) {
-  const files = fs.readdirSync(folderPath).filter((f) => f.endsWith(".txt"));
+  const files = fs.readdirSync(folderPath).filter((f) => /\.(txt|pdf)$/i.test(f));
   console.log(`[SERVER] [RAG:${label}] Ingesting ${files.length} doc(s)...`);
 
-  const docs = [];
-  for (const filename of files) {
-    const text = fs.readFileSync(path.join(folderPath, filename), "utf-8");
-    const chunks = await splitter.splitText(text);
-    for (const chunk of chunks) {
-      docs.push(new Document({ pageContent: chunk, metadata: { source: filename } }));
+  const documents = await Promise.all(files.map(async (filename) => {
+    const filePath = path.join(folderPath, filename);
+    let text;
+    if (path.extname(filename).toLowerCase() === ".pdf") {
+      const parser = new PDFParse({ data: fs.readFileSync(filePath) });
+      try {
+        text = (await parser.getText()).text;
+      } finally {
+        await parser.destroy();
+      }
+    } else {
+      text = fs.readFileSync(filePath, "utf-8");
     }
-  }
+    // One Document per FILE, not per chunk — LlamaIndex's own
+    // SentenceSplitter transformation (passed below) does the
+    // chunking, and every resulting chunk inherits this metadata.
+    return new Document({ text, id_: filename, metadata: { source: filename } });
+  }));
 
-  // This one line is the entire "vector database" now: chunking +
-  // embedding + storage, all handled by LangChain instead of the old
-  // hand-rolled records array + cosineSimilarity().
-  const store = await MemoryVectorStore.fromDocuments(docs, embeddings);
+  const vectorStore = vectorStoreFor(label);
+  const storageContext = await storageContextFromDefaults({ vectorStore });
 
-  console.log(`[SERVER] [RAG:${label}] Indexed ${docs.length} chunk(s) total`);
+  console.log(`[SERVER] [RAG:${label}] [llamaindex] building VectorStoreIndex (chunking + embedding + upsert)...`);
+  const index = await VectorStoreIndex.fromDocuments(documents, {
+    storageContext,
+    transformations: [splitter],
+  });
+  console.log(`[SERVER] [RAG:${label}] [llamaindex] index ready`);
 
   return {
-    retriever: store.asRetriever({ k: 3 }),
+    retriever: index.asRetriever({ similarityTopK: 3 }),
 
     async search(query, topK = 3) {
-      // similaritySearchWithScore returns [Document, score] pairs,
-      // score = cosine similarity (same metric the hand-rolled
-      // version used), highest first — same shape as before.
-      const results = await store.similaritySearchWithScore(query, topK);
-      return results.map(([doc, score]) => ({
-        text: doc.pageContent,
-        source: doc.metadata.source,
-        score,
+      console.log(`[SERVER] [RAG:${label}] [llamaindex] retrieving top ${topK} for query: "${query}"`);
+      const retriever = index.asRetriever({ similarityTopK: topK });
+      const results = await retriever.retrieve(query);
+      return results.map((r) => ({
+        text: typeof r.node.getContent === "function" ? r.node.getContent() : r.node.text,
+        source: r.node.metadata?.source ?? "unknown",
+        // LlamaIndex returns cosine similarity in [0,1] for these
+        // stores, same metric/range the LangChain version used, so
+        // graph.js's RELEVANCE_THRESHOLD comparison in the client
+        // keeps working unchanged.
+        score: r.score ?? 0,
       }));
     },
   };
 }
-
-// --- Swapping to a real persistent vector DB later ---
-// Replace the MemoryVectorStore import + the one `fromDocuments` line
-// above with, e.g.:
-//   import { Chroma } from "@langchain/community/vectorstores/chroma";
-//   const store = await Chroma.fromDocuments(docs, embeddings, {
-//     collectionName: label,
-//     url: process.env.CHROMA_URL,
-//   });
-// Everything else in this file — and all of server.js — stays
-// identical, because both stores implement the same VectorStore
-// interface (.asRetriever(), .similaritySearchWithScore()).
-//
-// IMPORTANT (re: "should hr-policy/engineering/admin each get a
-// different vector DB engine?"): buildIndex() is called once per
-// doc folder (see server.js — hr-policy, engineering, and now
-// admin-policies each get their own call). Nothing stops each call
-// from using a *different* store — e.g. hr-policy on Chroma,
-// engineering on PGVectorStore, admin-policies on Qdrant — since
-// they're three independent indices already, each with its own
-// buildIndex() call and its own tool. You'd do that for
-// infra/ops reasons (who hosts what, access control, existing
-// team expertise), not because LangChain requires it and NOT
-// because it changes anything about whether you need LangGraph —
-// that question is about how the *tool-calling loop* is
-// orchestrated on the client, which is a completely separate layer
-// from which database sits behind any one RAG tool. Swap the
-// `MemoryVectorStore.fromDocuments(...)` line per-domain if/when
-// each domain gets its own real deployment; the { text, source,
-// score } contract server.js and the client depend on stays fixed
-// either way.
