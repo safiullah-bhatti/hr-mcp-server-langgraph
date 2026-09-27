@@ -8,11 +8,18 @@
 // Secrets live in THIS server's own .env file — never passed in by,
 // or visible to, any client. This is the real production pattern.
 //
-// LangChain note: buildIndex() and *Index.search() still keep the
-// exact same signature/return shape described in rag.js — only its
-// internals are LangChain (text splitter, Gemini embeddings,
-// MemoryVectorStore). Two things ARE new in this version, both for
-// the LangGraph client (see hr-mcp-client-langchain/graph.js):
+// LlamaIndex note: buildIndex()/search() keep their exact same
+// signature/return shape — rag.js's internals are LlamaIndex now
+// (SentenceSplitter, Gemini embeddings, VectorStoreIndex). NEW in
+// this version: rag.js also exports buildSummaryIndex(), used below
+// to register 3 summarize_* tools alongside the 3 search_* ones —
+// "find the fact" (similarity search) vs. "read everything" (whole-
+// folder synthesis) are different jobs, so they're different tools;
+// server.js doesn't pick one over the other, the CALLING LLM does,
+// based on each tool's description.
+//
+// Two more things are new in this version, both for the LangGraph
+// client (see hr-mcp-client-langchain/graph.js):
 //
 // 1. A THIRD RAG tool, search_admin_docs, indexing docs/admin-policies
 //    (IT/security, expenses). This is just "call buildIndex() a third
@@ -48,7 +55,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 import path from "path";
 import { fileURLToPath } from "url";
-import { buildIndex } from "./rag.js";
+import { buildIndex, buildSummaryIndex } from "./rag.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -77,11 +84,21 @@ function ragToolResult(label, matches) {
   return { content: [{ type: "text", text: JSON.stringify(payload) }] };
 }
 
-// Builds a brand-new McpServer with all 7 tools registered, closing
+// Same shape as ragToolResult, for the 3 new summarize_* tools below.
+// No topScore/matches here — a summary is one synthesized answer, not
+// a ranked list of chunks — but still a small JSON envelope so a
+// client can tell the two tool families apart programmatically.
+function summarizeToolResult(label, result) {
+  console.log(`[SERVER] [RAG:${label}]   summary covers ${result.sourceCount} doc(s)`);
+  const payload = { sourceCount: result.sourceCount, summary: result.text };
+  return { content: [{ type: "text", text: JSON.stringify(payload) }] };
+}
+
+// Builds a brand-new McpServer with all 10 tools registered, closing
 // over the already-built indices (cheap — no re-embedding, just new
 // tool-registration bookkeeping). Called once per incoming HTTP
 // request so each request gets its own server<->transport pairing.
-function createMcpServer(hrIndex, engIndex, adminIndex) {
+function createMcpServer(hrIndex, engIndex, adminIndex, hrSummary, engSummary, adminSummary) {
   const server = new McpServer({ name: "hr-tools-server", version: "1.0.0" });
 
   // ---- 4 "live data" tools — unchanged logic from before ----
@@ -208,14 +225,85 @@ function createMcpServer(hrIndex, engIndex, adminIndex) {
     }
   );
 
+  // ---- 3 SUMMARY tools — NEW. "Read everything in this folder and
+  // synthesize an answer" instead of "find the closest-matching
+  // chunks." Use these for broad/whole-collection questions
+  // ("summarize...", "give me an overview of...") — the search_*
+  // tools above stay the right choice for specific fact lookups. ----
+
+  server.registerTool(
+    "summarize_hr_policy",
+    {
+      title: "Summarize HR Policy Docs",
+      description:
+        "Reads ALL internal HR policy documents and synthesizes a summary/overview answer. Use this for broad questions like 'summarize our HR policies', NOT for looking up one specific fact — use search_hr_policy for that instead.",
+      inputSchema: z.object({ query: z.string().optional() }),
+    },
+    async ({ query }) => {
+      console.log(`[SERVER] [RAG:hr-policy] summarize called -> "${query ?? "(default)"}"`);
+      try {
+        const result = query ? await hrSummary.summarize(query) : await hrSummary.summarize();
+        return summarizeToolResult("hr-policy", result);
+      } catch (err) {
+        console.error(`[SERVER] [RAG:hr-policy] summarize FAILED for "${query}":`, err);
+        throw err;
+      }
+    }
+  );
+
+  server.registerTool(
+    "summarize_engineering_practices",
+    {
+      title: "Summarize Engineering Practice Docs",
+      description:
+        "Reads ALL internal engineering best-practice documents and synthesizes a summary/overview answer. Use this for broad questions like 'summarize our engineering standards', NOT for looking up one specific fact — use search_engineering_practices for that instead.",
+      inputSchema: z.object({ query: z.string().optional() }),
+    },
+    async ({ query }) => {
+      console.log(`[SERVER] [RAG:engineering] summarize called -> "${query ?? "(default)"}"`);
+      try {
+        const result = query ? await engSummary.summarize(query) : await engSummary.summarize();
+        return summarizeToolResult("engineering", result);
+      } catch (err) {
+        console.error(`[SERVER] [RAG:engineering] summarize FAILED for "${query}":`, err);
+        throw err;
+      }
+    }
+  );
+
+  server.registerTool(
+    "summarize_admin_docs",
+    {
+      title: "Summarize Admin / IT / Expense Policy Docs",
+      description:
+        "Reads ALL internal admin documents (IT & security policy, expense/reimbursement policy) and synthesizes a summary/overview answer. Use this for broad questions like 'summarize our admin policies', NOT for looking up one specific fact — use search_admin_docs for that instead.",
+      inputSchema: z.object({ query: z.string().optional() }),
+    },
+    async ({ query }) => {
+      console.log(`[SERVER] [RAG:admin-policies] summarize called -> "${query ?? "(default)"}"`);
+      try {
+        const result = query ? await adminSummary.summarize(query) : await adminSummary.summarize();
+        return summarizeToolResult("admin-policies", result);
+      } catch (err) {
+        console.error(`[SERVER] [RAG:admin-policies] summarize FAILED for "${query}":`, err);
+        throw err;
+      }
+    }
+  );
+
   return server;
 }
 
 async function main() {
-  console.log("[SERVER] Building RAG indices from docs/ ...");
+  console.log("[SERVER] Building RAG search indices from docs/ ...");
   const hrIndex = await buildIndex(path.join(__dirname, "docs/hr-policy"), "hr-policy");
   const engIndex = await buildIndex(path.join(__dirname, "docs/engineering"), "engineering");
   const adminIndex = await buildIndex(path.join(__dirname, "docs/admin-policies"), "admin-policies");
+
+  console.log("[SERVER] Building RAG summary indices from docs/ ...");
+  const hrSummary = await buildSummaryIndex(path.join(__dirname, "docs/hr-policy"), "hr-policy");
+  const engSummary = await buildSummaryIndex(path.join(__dirname, "docs/engineering"), "engineering");
+  const adminSummary = await buildSummaryIndex(path.join(__dirname, "docs/admin-policies"), "admin-policies");
 
   // ---- HTTP transport setup ----
   // Stateless mode (sessionIdGenerator: undefined). A single transport
@@ -231,7 +319,7 @@ async function main() {
 
   app.post("/mcp", async (req, res) => {
     try {
-      const server = createMcpServer(hrIndex, engIndex, adminIndex);
+      const server = createMcpServer(hrIndex, engIndex, adminIndex, hrSummary, engSummary, adminSummary);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       res.on("close", () => {
         transport.close();
@@ -253,7 +341,7 @@ async function main() {
 
   app.listen(PORT, () => {
     console.log(`[SERVER] HR MCP server running at http://localhost:${PORT}/mcp`);
-    console.log("[SERVER] 7 tools registered. Waiting for client requests...");
+    console.log("[SERVER] 10 tools registered (4 live-data, 3 search, 3 summarize). Waiting for client requests...");
   });
 }
 
